@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::error::Error;
 use std::fs::File;
+use std::path::{Path, PathBuf};
 
 fn normalize_header(s: &str) -> String {
     s.replace('\u{00A0}', " ").trim().to_string()
@@ -91,6 +92,31 @@ fn env_non_empty(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+fn env_bool(key: &str) -> Option<bool> {
+    let v = env_non_empty(key)?;
+    let v = v.trim().to_ascii_lowercase();
+    match v.as_str() {
+        "1" | "true" | "yes" | "y" | "on" => Some(true),
+        "0" | "false" | "no" | "n" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+fn resolve_output_xlsx(output_xlsx: String) -> String {
+    let path = Path::new(&output_xlsx);
+    if path.is_absolute() {
+        return output_xlsx;
+    }
+
+    let Some(output_dir) = env_non_empty("OUTPUT_DIR") else {
+        return output_xlsx;
+    };
+
+    let mut full = PathBuf::from(output_dir);
+    full.push(path);
+    full.to_string_lossy().to_string()
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = env::args().skip(1);
     let arg_input_csv = args.next();
@@ -98,12 +124,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     dotenvy::dotenv().ok();
 
+    let exclude_today = match env_bool("INCLUDE_TODAY") {
+        Some(include_today) => !include_today,
+        None => env_bool("EXCLUDE_TODAY").unwrap_or(true),
+    };
+
     let input_csv = arg_input_csv
         .or_else(|| env_non_empty("INPUT_CSV"))
         .unwrap_or_else(default_input_csv);
-    let output_xlsx = arg_output_xlsx
+    let output_xlsx_raw = arg_output_xlsx
         .or_else(|| env_non_empty("OUTPUT_XLSX"))
         .unwrap_or_else(default_output_xlsx);
+    let output_xlsx = resolve_output_xlsx(output_xlsx_raw);
 
     let mp = MultiProgress::new();
     mp.set_draw_target(ProgressDrawTarget::stdout_with_hz(12));
@@ -149,7 +181,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Some(d) => d,
             None => continue,
         };
-        if day == today_utc8 {
+        if exclude_today && day == today_utc8 {
             continue;
         }
 
